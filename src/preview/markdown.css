@@ -72,6 +72,7 @@
 .markdown-body table th, .markdown-body table td {
   padding: 6px 13px;
   border: 1px solid #d0d7de;
+  font-size: inherit;
 }
 .markdown-body table th { font-weight: 600; background: #f6f8fa; }
 .markdown-body table tr { background: #fff; }

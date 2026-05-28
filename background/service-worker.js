@@ -8,6 +8,13 @@ importScripts('../lib/turndown.js');
 const BREADCRUMB_SELECTOR = '.wiki-suite-title__inner-wrapper > :first-child > :last-child .breadcrumb-container-item__text';
 const FALLBACK_BREADCRUMB_SELECTOR = '.note-title__input-and-star .breadcrumb-container-item :first-child :last-child, .note-title__input-and-star .note-title__input :first-child';
 
+// In-memory preview store, keyed by preview tab ID
+const previewStore = new Map();
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  previewStore.delete(tabId);
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'EXTRACT_AND_CONVERT') {
     handleExtractAndConvert()
@@ -17,6 +24,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ error: err.message });
       });
     return true;
+  }
+  if (msg.type === 'GET_PREVIEW_DATA') {
+    sendResponse(previewStore.get(msg.tabId) || null);
+    return false;
   }
 });
 
@@ -253,12 +264,12 @@ async function handleExtractAndConvert() {
 
   // Step 5: Store and open preview
   notifyPopup('PROGRESS', { step: 'step-preview', state: 'active' });
-  await chrome.storage.local.set({
-    _previewMarkdown: finalMarkdown,
-    _previewTitle: cleanTitle || 'Feishu Doc',
-    _previewImages: imageDataMap,
+  const previewTab = await chrome.tabs.create({ url: chrome.runtime.getURL('preview.html') });
+  previewStore.set(previewTab.id, {
+    markdown: finalMarkdown,
+    title: cleanTitle || 'Feishu Doc',
+    images: imageDataMap,
   });
-  chrome.tabs.create({ url: chrome.runtime.getURL('preview.html') });
   notifyPopup('PROGRESS', { step: 'step-preview', state: 'done' });
   notifyPopup('DONE', {});
 }
@@ -288,7 +299,7 @@ function extractBlockModelMarkdown() {
     HEADING7: 'heading7', HEADING8: 'heading8', HEADING9: 'heading9',
     BULLET: 'bullet', ORDERED: 'ordered', CODE: 'code',
     QUOTE_CONTAINER: 'quote_container', TODO: 'todo',
-    IMAGE: 'image', DIVIDER: 'divider', TABLE: 'table',
+    IMAGE: 'image', DIVIDER: 'divider', TABLE: 'table', CELL: 'table_cell',
     GRID: 'grid', CALLOUT: 'callout',
     IFRAME: 'iframe', SYNCED_REFERENCE: 'synced_reference', SYNCED_SOURCE: 'synced_source',
     GRID_COLUMN: 'grid_column', QUOTE: 'quote',
@@ -473,19 +484,28 @@ function extractBlockModelMarkdown() {
         break;
       }
       case T.TABLE: {
-        const rows = block.snapshot?.rows_id || [];
-        const cols = block.snapshot?.columns_id || [];
-        if (!rows.length || !cols.length) break;
-        const header = cols.map(() => '  ').join(' | ');
-        const sep = cols.map(() => '---').join(' | ');
-        const lines = ['| ' + header + ' |', '| ' + sep + ' |'];
-        for (const row of rows) {
-          const cellsText = cols.map((_, ci) => {
-            const cell = block.children?.find(c => c.snapshot?.row_id === row && c.snapshot?.column_id === cols[ci]);
-            if (!cell) return ' ';
-            return opsToMd(getContent(cell)).replace(/\|/g, '\\|') || ' ';
+        const snap = block.snapshot || {};
+        const colCount = (snap.columns_id && snap.columns_id.length) || 0;
+        const cellChildren = (block.children || []).filter(c => c && c.type === T.CELL);
+        if (colCount <= 0 || cellChildren.length === 0) break;
+
+        const rows = [];
+        for (let r = 0; r < cellChildren.length; r += colCount) {
+          const rowCells = cellChildren.slice(r, r + colCount);
+          const rowStr = rowCells.map(cell => {
+            const cellLines = flatChildren(cell.children || []).map(c => blockToMd(c, 0)).filter(Boolean);
+            return (cellLines.join(' ') || ' ').replace(/\|/g, '\\|').replace(/\n/g, ' ');
           });
-          lines.push('| ' + cellsText.join(' | ') + ' |');
+          rows.push(rowStr);
+        }
+        if (rows.length === 0) break;
+
+        const header = rows[0];
+        const sep = header.map(() => '---');
+        const body = rows.slice(1);
+        const lines = ['| ' + header.join(' | ') + ' |', '| ' + sep.join(' | ') + ' |'];
+        for (const row of body) {
+          lines.push('| ' + row.join(' | ') + ' |');
         }
         md = lines.join('\n');
         break;

@@ -24,17 +24,15 @@ export default function App() {
   const renderedRef = useRef(null)
 
   useEffect(() => {
-    chrome.storage.local.get(['_previewMarkdown', '_previewTitle', '_previewImages'], (result) => {
-      const md = result._previewMarkdown || ''
-      const t = result._previewTitle || 'Feishu Doc'
-      const imgs = result._previewImages || {}
-
-      setMarkdown(md)
-      setTitle(t)
-      setImageMap(imgs)
-      document.title = t + ' - Markdown Preview'
-
-      chrome.storage.local.remove(['_previewMarkdown', '_previewTitle', '_previewImages'])
+    chrome.tabs.getCurrent((tab) => {
+      if (!tab) return
+      chrome.runtime.sendMessage({ type: 'GET_PREVIEW_DATA', tabId: tab.id }, (data) => {
+        if (!data) return
+        setMarkdown(data.markdown || '')
+        setTitle(data.title || 'Feishu Doc')
+        setImageMap(data.images || {})
+        document.title = (data.title || 'Feishu Doc') + ' - Markdown Preview'
+      })
     })
   }, [])
 
